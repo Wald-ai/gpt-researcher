@@ -121,6 +121,7 @@ def sanitize_filename(filename: str) -> str:
 async def handle_start_command(websocket, data: str, manager):
     json_data = json.loads(data[6:])
     (
+        token,
         task,
         report_type,
         source_urls,
@@ -130,6 +131,13 @@ async def handle_start_command(websocket, data: str, manager):
         report_source,
         query_domains,
     ) = extract_command_data(json_data)
+    
+    # Authenticate the request before proceeding
+    if not token or token != os.getenv("GPT_RESEARCHER_AUTH_TOKEN"):
+        logger.error("Unauthorized: Invalid token")
+        await websocket.send_json({ "type": "error", "output": "Unauthorized: Invalid token" })
+        await manager.disconnect(websocket)
+        return
 
     if not task or not report_type:
         print("Error: Missing task or report_type")
@@ -306,6 +314,7 @@ async def handle_websocket_communication(websocket, manager):
 
 def extract_command_data(json_data: Dict) -> tuple:
     return (
+        json_data.get("token"),
         json_data.get("task"),
         json_data.get("report_type"),
         json_data.get("source_urls"),

@@ -29,9 +29,14 @@ class ResearchConductor:
             self.researcher.websocket,
         )
 
-        search_results = await get_search_results(query, self.researcher.retrievers[0], query_domains)
+        search_results = await get_search_results(query, self.researcher.retrievers, query_domains)
         self.logger.info(f"Initial search results obtained: {len(search_results)} results")
-
+        
+        # Check if search results are empty
+        if len(search_results) == 0:
+            self.logger.error("No search results found for query. Unable to conduct research.")
+            return []
+        
         await stream_output(
             "logs",
             "planning_research",
