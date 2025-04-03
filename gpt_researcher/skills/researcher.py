@@ -254,14 +254,15 @@ class ResearchConductor:
             
         if additional_sources and len(additional_sources) > 0:
             self.logger.info(f"Additional sources count: {len(additional_sources)}")
-            await stream_output(
-                "logs",
-                "adding_additional_sources",
-                f"Adding additional sources to research",
-                self.researcher.websocket,
-                True,
-                [source['title'] for source in additional_sources],
-            )
+            for source in additional_sources:
+                await stream_output(
+                    "logs",
+                    "adding_additional_source",
+                    f"Adding additional source to research: {source['title']}",
+                    self.researcher.websocket,
+                    True,
+                    source['title']
+                )
             
         # Using asyncio.gather to process the sub_queries asynchronously
         try:
