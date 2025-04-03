@@ -283,56 +283,6 @@ class ResearchConductor:
         except Exception as e:
             self.logger.error(f"Error during web search: {e}", exc_info=True)
             return []
-        
-    async def _get_context_from_provided_content(self, query, additional_data: list, query_domains: list | None = None):
-        """
-        Generates the context for the research task by searching the query and scraping the results
-        Returns:
-            context: List of context
-        """
-        
-        if additional_data is None:
-            additional_data = []
-        if query_domains is None:
-            query_domains = []
-
-        # Generate Sub-Queries including original query
-        sub_queries = await self.plan_research(query, query_domains)
-        self.logger.info(f"Generated sub-queries: {sub_queries}")
-        
-        # If this is not part of a sub researcher, add original query to research for better results
-        if self.researcher.report_type != "subtopic_report":
-            sub_queries.append(query)
-
-        if self.researcher.verbose:
-            await stream_output(
-                "logs",
-                "subqueries",
-                f"🗂️ I will conduct my research based on the following queries: {sub_queries}...",
-                self.researcher.websocket,
-                True,
-                sub_queries,
-            )
-
-        # Using asyncio.gather to process the sub_queries asynchronously
-        try:
-            context = await asyncio.gather(
-                *[
-                    self._process_sub_query(sub_query, scraped_data, query_domains)
-                    for sub_query in sub_queries
-                ]
-            )
-            self.logger.info(f"Gathered context from {len(context)} sub-queries")
-            # Filter out empty results and join the context
-            context = [c for c in context if c]
-            if context:
-                combined_context = " ".join(context)
-                self.logger.info(f"Combined context size: {len(combined_context)}")
-                return combined_context
-            return []
-        except Exception as e:
-            self.logger.error(f"Error during web search: {e}", exc_info=True)
-            return []
 
     async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = [], additional_sources: list[dict] | None = None):
         """Takes in a sub query and scrapes urls based on it and gathers context."""
