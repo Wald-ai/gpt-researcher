@@ -94,7 +94,7 @@ const GPTResearcher = (() => {
         tone: tone,
         agent: agent,
         query_domains: query_domains,
-        additional_contexts: [additional_context],
+        additional_sources: additional_context ? [{ "title": "Additional Sources", "raw_content": additional_context }] : [],
       }
 
       socket.send(`start ${JSON.stringify(requestData)}`)
