@@ -240,7 +240,7 @@ class ResearchConductor:
         
         # If this is not part of a sub researcher, add original query to research for better results
         if self.researcher.report_type != "subtopic_report":
-            sub_queries.append(query)
+            sub_queries.insert(0, query)
 
         if self.researcher.verbose:
             await stream_output(
