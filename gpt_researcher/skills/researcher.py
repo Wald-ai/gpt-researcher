@@ -436,8 +436,8 @@ class ResearchConductor:
         if query_domains is None:
             query_domains = []
             
-         # extract urls from sub_query if present
-        extracted_urls = re.findall(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}', sub_query)
+         # extract urls from sub_query if present, eg. https://www.example.com, www.example.com, example.com, example.com/privacy, example.com/privacy.pdf
+        extracted_urls = re.findall(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', sub_query)
         # append https:// to the urls if not present
         provided_urls = [f"https://{url.lower()}" if not url.startswith("https") else url.lower() for url in extracted_urls]
 
