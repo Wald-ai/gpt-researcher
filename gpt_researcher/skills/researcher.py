@@ -7,6 +7,7 @@ from ..actions.query_processing import plan_research_outline, get_search_results
 from ..document import DocumentLoader, OnlineDocumentLoader, LangChainDocumentLoader
 from ..utils.enum import ReportSource
 from ..utils.logging_config import get_json_handler
+import re
 
 
 class ResearchConductor:
@@ -99,7 +100,7 @@ class ResearchConductor:
 
         elif self.researcher.report_source == ReportSource.Web.value:
             self.logger.info("Using web search")
-            research_data = await self._get_context_by_web_search(self.researcher.query, [], self.researcher.query_domains, self.researcher.additional_sources)
+            research_data = await self._get_context_by_web_search(self.researcher.query, [], self.researcher.query_domains)
 
         # ... rest of the conditions ...
         elif self.researcher.report_source == ReportSource.Local.value:
@@ -145,7 +146,30 @@ class ResearchConductor:
 
         elif self.researcher.report_source == ReportSource.LangChainVectorStore.value:
             research_data = await self._get_context_by_vectorstore(self.researcher.query, self.researcher.vector_store_filter)
-        
+            
+            
+        if self.researcher.additional_sources:
+            
+            additional_sources_content = []
+            for source in self.researcher.additional_sources:
+                # pick only the raw_content from the additional sources to prevent incorrect citations
+                additional_sources_content.append({
+                    'raw_content': source['raw_content']
+                })
+                await stream_output(
+                    "logs",
+                    "adding_additional_source",
+                    f"Getting relevant context from additional sources: {source['title']}",
+                    self.researcher.websocket,
+                    True,
+                    source['title']
+                )
+                
+            # get relevant context from additional sources content
+            relevant_contexts = await self.researcher.context_manager.get_similar_content_by_query(self.researcher.query, additional_sources_content)
+            
+            if relevant_contexts:
+                research_data += f'Context from additional sources: {relevant_contexts}'
 
         # Rank and curate the sources
         self.researcher.context = research_data
@@ -221,7 +245,7 @@ class ResearchConductor:
         )
         return context
 
-    async def _get_context_by_web_search(self, query, scraped_data: list | None = None, query_domains: list | None = None, additional_sources: list[dict] | None = None):
+    async def _get_context_by_web_search(self, query, scraped_data: list | None = None, query_domains: list | None = None):
         """
         Generates the context for the research task by searching the query and scraping the results
         Returns:
@@ -252,23 +276,12 @@ class ResearchConductor:
                 sub_queries,
             )
             
-        if additional_sources and len(additional_sources) > 0:
-            self.logger.info(f"Additional sources count: {len(additional_sources)}")
-            for source in additional_sources:
-                await stream_output(
-                    "logs",
-                    "adding_additional_source",
-                    f"Adding additional source to research: {source['title']}",
-                    self.researcher.websocket,
-                    True,
-                    source['title']
-                )
             
         # Using asyncio.gather to process the sub_queries asynchronously
         try:
             context = await asyncio.gather(
                 *[
-                    self._process_sub_query(sub_query, scraped_data, query_domains, additional_sources)
+                    self._process_sub_query(sub_query, scraped_data, query_domains)
                     for sub_query in sub_queries
                 ]
             )
@@ -284,7 +297,7 @@ class ResearchConductor:
             self.logger.error(f"Error during web search: {e}", exc_info=True)
             return []
 
-    async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = [], additional_sources: list[dict] | None = None):
+    async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = []):
         """Takes in a sub query and scrapes urls based on it and gathers context."""
         if self.json_handler:
             self.json_handler.log_event("sub_query", {
@@ -304,9 +317,6 @@ class ResearchConductor:
             if not scraped_data:
                 scraped_data = await self._scrape_data_by_urls(sub_query, query_domains)
                 self.logger.info(f"Scraped data size: {len(scraped_data)}")
-                
-            if additional_sources:
-                scraped_data.extend(additional_sources)
     
             content = await self.researcher.context_manager.get_similar_content_by_query(sub_query, scraped_data)
             self.logger.info(f"Content found for sub-query: {len(str(content)) if content else 0} chars")
@@ -388,8 +398,8 @@ class ResearchConductor:
 
         return new_urls
 
-    async def _search_relevant_source_urls(self, query, query_domains: list | None = None):
-        new_search_urls = []
+    async def _search_relevant_source_urls(self, query, query_domains: list | None = None, provided_urls: list | None = None):
+        new_search_urls = provided_urls if provided_urls else []
         if query_domains is None:
             query_domains = []
 
@@ -425,8 +435,13 @@ class ResearchConductor:
         """
         if query_domains is None:
             query_domains = []
+            
+         # extract urls from sub_query if present
+        extracted_urls = re.findall(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}', sub_query)
+        # append https:// to the urls if not present
+        provided_urls = [f"https://{url.lower()}" if not url.startswith("https") else url.lower() for url in extracted_urls]
 
-        new_search_urls = await self._search_relevant_source_urls(sub_query, query_domains)
+        new_search_urls = await self._search_relevant_source_urls(sub_query, query_domains, provided_urls)
 
         # Log the research process if verbose mode is on
         if self.researcher.verbose:
