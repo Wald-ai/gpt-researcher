@@ -7,6 +7,7 @@ from ..actions.query_processing import plan_research_outline, get_search_results
 from ..document import DocumentLoader, OnlineDocumentLoader, LangChainDocumentLoader
 from ..utils.enum import ReportSource
 from ..utils.logging_config import get_json_handler
+import re
 
 
 class ResearchConductor:
@@ -99,7 +100,7 @@ class ResearchConductor:
 
         elif self.researcher.report_source == ReportSource.Web.value:
             self.logger.info("Using web search")
-            research_data = await self._get_context_by_web_search(self.researcher.query, [], self.researcher.query_domains)
+            research_data = await self._get_context_by_web_search(self.researcher.query, [], self.researcher.query_domains, self.researcher.additional_sources)
 
         # ... rest of the conditions ...
         elif self.researcher.report_source == ReportSource.Local.value:
@@ -145,6 +146,7 @@ class ResearchConductor:
 
         elif self.researcher.report_source == ReportSource.LangChainVectorStore.value:
             research_data = await self._get_context_by_vectorstore(self.researcher.query, self.researcher.vector_store_filter)
+
 
         # Rank and curate the sources
         self.researcher.context = research_data
@@ -220,7 +222,7 @@ class ResearchConductor:
         )
         return context
 
-    async def _get_context_by_web_search(self, query, scraped_data: list | None = None, query_domains: list | None = None):
+    async def _get_context_by_web_search(self, query, scraped_data: list | None = None, query_domains: list | None = None, additional_sources: list | None = None):
         """
         Generates the context for the research task by searching the query and scraping the results
         Returns:
@@ -239,7 +241,7 @@ class ResearchConductor:
         
         # If this is not part of a sub researcher, add original query to research for better results
         if self.researcher.report_type != "subtopic_report":
-            sub_queries.append(query)
+            sub_queries.insert(0, query)
 
         if self.researcher.verbose:
             await stream_output(
@@ -250,12 +252,24 @@ class ResearchConductor:
                 True,
                 sub_queries,
             )
-
+            
+        # Log additional sources if provided
+        if additional_sources:
+            for source in additional_sources:
+                await stream_output(
+                    "logs",
+                    "adding_additional_source",
+                    f"Adding additional source: {source['title']}",
+                    self.researcher.websocket,
+                    True,
+                    source['title'],
+                )
+            
         # Using asyncio.gather to process the sub_queries asynchronously
         try:
             context = await asyncio.gather(
                 *[
-                    self._process_sub_query(sub_query, scraped_data, query_domains)
+                    self._process_sub_query(sub_query, scraped_data, query_domains, additional_sources)
                     for sub_query in sub_queries
                 ]
             )
@@ -271,7 +285,7 @@ class ResearchConductor:
             self.logger.error(f"Error during web search: {e}", exc_info=True)
             return []
 
-    async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = []):
+    async def _process_sub_query(self, sub_query: str, scraped_data: list = [], query_domains: list = [], additional_sources: list | None = None):
         """Takes in a sub query and scrapes urls based on it and gathers context."""
         if self.json_handler:
             self.json_handler.log_event("sub_query", {
@@ -288,11 +302,26 @@ class ResearchConductor:
             )
 
         try:
+            content = ""
+            
+            # Extract urls from sub_query if present
+            extracted_urls = await self._extract_urls_from_query(sub_query)
+            if len(extracted_urls) > 0:
+                content += await self._get_context_by_urls(extracted_urls)
+                self.logger.info(f"Additional urls content size: {len(content)}")
+            
             if not scraped_data:
                 scraped_data = await self._scrape_data_by_urls(sub_query, query_domains)
                 self.logger.info(f"Scraped data size: {len(scraped_data)}")
-
-            content = await self.researcher.context_manager.get_similar_content_by_query(sub_query, scraped_data)
+        
+            content += await self.researcher.context_manager.get_similar_content_by_query(sub_query, scraped_data)
+            self.logger.info(f"Scraped data content size: {len(content)}")
+            
+            # if additional sources are provided, add them to the content
+            if additional_sources:
+                content += await self.researcher.context_manager.get_similar_content_by_query(sub_query, additional_sources)
+                self.logger.info(f"Additional sources content size: {len(content)}")
+                
             self.logger.info(f"Content found for sub-query: {len(str(content)) if content else 0} chars")
 
             if content and self.researcher.verbose:
@@ -373,7 +402,6 @@ class ResearchConductor:
         return new_urls
 
     async def _search_relevant_source_urls(self, query, query_domains: list | None = None):
-        new_search_urls = []
         if query_domains is None:
             query_domains = []
 
@@ -389,10 +417,9 @@ class ResearchConductor:
 
             # Collect new URLs from search results
             search_urls = [url.get("href") for url in search_results]
-            new_search_urls.extend(search_urls)
 
         # Get unique URLs
-        new_search_urls = await self._get_new_urls(new_search_urls)
+        new_search_urls = await self._get_new_urls(search_urls)
         random.shuffle(new_search_urls)
 
         return new_search_urls
@@ -428,3 +455,14 @@ class ResearchConductor:
             self.researcher.vector_store.load(scraped_content)
 
         return scraped_content
+    
+    async def _extract_urls_from_query(self, query):
+        """Extracts urls from the query"""
+        
+        # extract urls from sub_query if present, eg. https://www.example.com, www.example.com, example.com, example.com/privacy, example.com/privacy.pdf
+        extracted_urls = re.findall(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', query)
+        
+        # append https:// to the urls if not present
+        formatted_urls = [f"https://{url.lower()}" if not url.startswith("https") else url.lower() for url in extracted_urls]
+        
+        return formatted_urls
